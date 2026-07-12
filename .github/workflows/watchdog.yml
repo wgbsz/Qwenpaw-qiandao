@@ -16,7 +16,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
@@ -36,35 +36,24 @@ jobs:
 
       - name: Check required secrets
         env:
-          STORAGE_STATE_B64: ${{ secrets.STORAGE_STATE_B64 }}
+          PLATFORM_EMAIL: ${{ secrets.PLATFORM_EMAIL }}
+          PLATFORM_PASSWORD: ${{ secrets.PLATFORM_PASSWORD }}
           PLATFORM_URL: ${{ secrets.PLATFORM_URL }}
         run: |
-          if [ -z "$STORAGE_STATE_B64" ]; then
-            echo "::error::缺少 GitHub Secret：STORAGE_STATE_B64。请把 auth.json 的 Base64 单行内容保存到该 Secret。"
-            exit 1
-          fi
-          if [ -z "$PLATFORM_URL" ]; then
-            echo "::error::缺少 GitHub Secret：PLATFORM_URL。请填写平台部署页面完整地址。"
-            exit 1
-          fi
+          test -n "$PLATFORM_EMAIL" || { echo "::error::缺少 Secret: PLATFORM_EMAIL"; exit 1; }
+          test -n "$PLATFORM_PASSWORD" || { echo "::error::缺少 Secret: PLATFORM_PASSWORD"; exit 1; }
+          test -n "$PLATFORM_URL" || { echo "::error::缺少 Secret: PLATFORM_URL"; exit 1; }
 
-      - name: Restore login state
+      - name: Login, check platform and run command
         env:
-          STORAGE_STATE_B64: ${{ secrets.STORAGE_STATE_B64 }}
-        run: |
-          printf '%s' "$STORAGE_STATE_B64" | base64 --decode > auth.json
-          test -s auth.json || { echo "::error::auth.json 解码后为空"; exit 1; }
-          node -e "JSON.parse(require('fs').readFileSync('auth.json', 'utf8')); console.log('登录状态文件有效')"
-
-      - name: Check platform, start it, open QwenPaw and run command
-        id: monitor
-        env:
+          PLATFORM_EMAIL: ${{ secrets.PLATFORM_EMAIL }}
+          PLATFORM_PASSWORD: ${{ secrets.PLATFORM_PASSWORD }}
           PLATFORM_URL: ${{ secrets.PLATFORM_URL }}
           WAKEUP_COMMAND: /opt/komari/wakeup.sh
           HEADLESS: "true"
         run: npm run check
 
-      - name: Upload login, running-status and command screenshots
+      - name: Upload platform screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -73,7 +62,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Send Telegram bot notification with screenshots
+      - name: Send Telegram notification and screenshots
         if: always()
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -85,7 +74,7 @@ jobs:
           SERVER_URL: ${{ github.server_url }}
         run: |
           if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-            echo "未配置 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID，跳过机器人通知。"
+            echo "未配置 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID，跳过通知。"
             exit 0
           fi
 
@@ -102,18 +91,16 @@ jobs:
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
 
           shopt -s nullglob
-          screenshots=(artifacts/*.png)
-          for image in "${screenshots[@]}"; do
-            filename="$(basename "$image")"
+          for image in artifacts/*.png; do
             curl --fail --silent --show-error \
               --request POST \
               --form "chat_id=$TELEGRAM_CHAT_ID" \
-              --form "caption=QwenPaw 截图: $filename" \
+              --form "caption=QwenPaw 截图: $(basename "$image")" \
               --form "photo=@$image" \
               "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto"
           done
 
-      - name: Keep only the current workflow run record
+      - name: Keep only current workflow run
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
@@ -121,28 +108,21 @@ jobs:
           CURRENT_RUN_ID: ${{ github.run_id }}
           WORKFLOW_FILE: watchdog.yml
         run: |
-          echo "删除此工作流以前的运行记录，仅保留当前记录 $CURRENT_RUN_ID"
-          page=1
-          while :; do
-            result="$(curl --fail --silent --show-error \
+          runs="$(curl --fail --silent --show-error \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$REPOSITORY/actions/workflows/$WORKFLOW_FILE/runs?per_page=100")"
+
+          printf '%s' "$runs" | jq -r --arg current "$CURRENT_RUN_ID" \
+            '.workflow_runs[] | select((.id | tostring) != $current) | .id' | \
+          while read -r id; do
+            [ -n "$id" ] || continue
+            echo "删除旧运行记录: $id"
+            curl --fail --silent --show-error \
+              --request DELETE \
               --header "Accept: application/vnd.github+json" \
               --header "Authorization: Bearer $GH_TOKEN" \
               --header "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/repos/$REPOSITORY/actions/workflows/$WORKFLOW_FILE/runs?per_page=100&page=$page")"
-
-            ids="$(printf '%s' "$result" | jq -r --arg current "$CURRENT_RUN_ID" '.workflow_runs[] | select((.id | tostring) != $current) | .id')"
-            count="$(printf '%s' "$result" | jq '.workflow_runs | length')"
-
-            for id in $ids; do
-              echo "删除旧运行记录: $id"
-              curl --fail --silent --show-error \
-                --request DELETE \
-                --header "Accept: application/vnd.github+json" \
-                --header "Authorization: Bearer $GH_TOKEN" \
-                --header "X-GitHub-Api-Version: 2022-11-28" \
-                "https://api.github.com/repos/$REPOSITORY/actions/runs/$id"
-            done
-
-            [ "$count" -lt 100 ] && break
-            page=$((page + 1))
+              "https://api.github.com/repos/$REPOSITORY/actions/runs/$id"
           done
