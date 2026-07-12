@@ -3,7 +3,7 @@ name: QwenPaw Platform Watchdog
 on:
   workflow_dispatch:
   schedule:
-    - cron: "17 */12 * * *"
+    - cron: "17 */6 * * *"
 
 permissions:
   contents: read
@@ -17,22 +17,16 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: "24"
           package-manager-cache: false
 
-      - name: Install dependencies
-        run: npm install
-
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
+      - run: npm install
+      - run: npx playwright install --with-deps chromium
 
       - name: Check required secrets
         env:
@@ -44,7 +38,7 @@ jobs:
           test -n "$PLATFORM_PASSWORD" || { echo "::error::Missing PLATFORM_PASSWORD"; exit 1; }
           test -n "$PLATFORM_URL" || { echo "::error::Missing PLATFORM_URL"; exit 1; }
 
-      - name: Locate monitor script and run
+      - name: Login, start platform and run command
         env:
           PLATFORM_EMAIL: ${{ secrets.PLATFORM_EMAIL }}
           PLATFORM_PASSWORD: ${{ secrets.PLATFORM_PASSWORD }}
@@ -52,24 +46,14 @@ jobs:
           WAKEUP_COMMAND: /opt/komari/wakeup.sh
           HEADLESS: "true"
         run: |
-          echo "Repository files:"
-          find . -maxdepth 4 -type f -print | sort
-
-          if [ -f "src/monitor.mjs" ]; then
-            SCRIPT="src/monitor.mjs"
-          elif [ -f "monitor.mjs" ]; then
-            SCRIPT="monitor.mjs"
+          if [ -f src/monitor.mjs ]; then
+            node src/monitor.mjs
+          elif [ -f monitor.mjs ]; then
+            node monitor.mjs
           else
-            SCRIPT="$(find . -maxdepth 4 -type f -name 'monitor.mjs' -print -quit)"
-          fi
-
-          if [ -z "$SCRIPT" ]; then
-            echo "::error::monitor.mjs was not found in this repository"
+            echo "::error::monitor.mjs not found"
             exit 1
           fi
-
-          echo "Using script: $SCRIPT"
-          node "$SCRIPT"
 
       - name: Upload screenshots
         if: always()
@@ -92,52 +76,26 @@ jobs:
           SERVER_URL: ${{ github.server_url }}
         run: |
           if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-            echo "Telegram secrets are not configured; skipping notification."
             exit 0
           fi
-
           RUN_URL="$SERVER_URL/$REPOSITORY/actions/runs/$RUN_ID"
-          printf -v MESSAGE 'QwenPaw status: %s\nRepository: %s\nRun: %s\nDetails: %s' \
-            "$JOB_STATUS" "$REPOSITORY" "$RUN_NUMBER" "$RUN_URL"
-
-          curl --fail --silent --show-error \
-            --request POST \
-            --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
-            --data-urlencode "text=$MESSAGE" \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
-
+          printf -v MESSAGE 'QwenPaw status: %s\nRepository: %s\nRun: %s\nDetails: %s' "$JOB_STATUS" "$REPOSITORY" "$RUN_NUMBER" "$RUN_URL"
+          curl --fail --silent --show-error --request POST --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" --data-urlencode "text=$MESSAGE" "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
           shopt -s nullglob
           for image in artifacts/*.png; do
-            curl --fail --silent --show-error \
-              --request POST \
-              --form "chat_id=$TELEGRAM_CHAT_ID" \
-              --form "caption=QwenPaw screenshot" \
-              --form "photo=@$image" \
-              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto"
+            curl --fail --silent --show-error --request POST --form "chat_id=$TELEGRAM_CHAT_ID" --form "caption=QwenPaw screenshot: $(basename "$image")" --form "photo=@$image" "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto"
           done
 
       - name: Delete older workflow runs
         if: always()
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           CURRENT_RUN_ID: ${{ github.run_id }}
-          WORKFLOW_FILE: watchdog.yaml
         run: |
-          runs="$(curl --fail --silent --show-error \
-            --header "Accept: application/vnd.github+json" \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/$REPOSITORY/actions/workflows/$WORKFLOW_FILE/runs?per_page=100")"
-
-          printf '%s' "$runs" | jq -r --arg current "$CURRENT_RUN_ID" \
-            '.workflow_runs[] | select((.id | tostring) != $current) | .id' | \
-          while read -r id; do
+          runs="$(curl --fail --silent --show-error --header "Accept: application/vnd.github+json" --header "Authorization: Bearer $GH_TOKEN" --header "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/actions/runs?per_page=100")"
+          printf '%s' "$runs" | jq -r --arg current "$CURRENT_RUN_ID" --arg workflow "$GITHUB_WORKFLOW" '.workflow_runs[] | select(.name == $workflow) | select((.id | tostring) != $current) | .id' | while read -r id; do
             [ -n "$id" ] || continue
-            curl --fail --silent --show-error \
-              --request DELETE \
-              --header "Accept: application/vnd.github+json" \
-              --header "Authorization: Bearer $GH_TOKEN" \
-              --header "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/repos/$REPOSITORY/actions/runs/$id"
+            curl --fail --silent --show-error --request DELETE --header "Accept: application/vnd.github+json" --header "Authorization: Bearer $GH_TOKEN" --header "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/actions/runs/$id"
           done
