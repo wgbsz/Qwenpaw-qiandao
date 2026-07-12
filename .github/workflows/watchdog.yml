@@ -13,26 +13,37 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
         with:
-          node-version: "20"
-          cache: npm
-      - run: npm install
-      - run: npx playwright install --with-deps chromium
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
       - name: Restore login state
         env:
           STORAGE_STATE_B64: ${{ secrets.STORAGE_STATE_B64 }}
         run: |
           test -n "$STORAGE_STATE_B64"
           printf '%s' "$STORAGE_STATE_B64" | base64 --decode > auth.json
+
       - name: Check, start, open and run command
         env:
           PLATFORM_URL: ${{ secrets.PLATFORM_URL }}
           WAKEUP_COMMAND: /opt/komari/wakeup.sh
           HEADLESS: "true"
         run: npm run check
+
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
