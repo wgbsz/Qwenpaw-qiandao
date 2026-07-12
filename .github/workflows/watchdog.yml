@@ -79,10 +79,8 @@ jobs:
           fi
 
           RUN_URL="$SERVER_URL/$REPOSITORY/actions/runs/$RUN_ID"
-          MESSAGE="QwenPaw 巡检结果: $JOB_STATUS
-仓库: $REPOSITORY
-运行编号: $RUN_NUMBER
-详情: $RUN_URL"
+          printf -v MESSAGE 'QwenPaw 巡检结果: %s\n仓库: %s\n运行编号: %s\n详情: %s' \
+            "$JOB_STATUS" "$REPOSITORY" "$RUN_NUMBER" "$RUN_URL"
 
           curl --fail --silent --show-error \
             --request POST \
