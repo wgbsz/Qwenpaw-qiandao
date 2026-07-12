@@ -1,0 +1,13 @@
+{
+  "name": "qwenpaw-platform-watchdog",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "auth": "node scripts/save-auth.mjs",
+    "check": "node src/monitor.mjs"
+  },
+  "dependencies": {
+    "@playwright/test": "^1.53.2"
+  }
+}

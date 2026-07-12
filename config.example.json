@@ -1,0 +1,16 @@
+{
+  "platformUrl": "https://请替换为部署页面地址",
+  "command": "/opt/komari/wakeup.sh",
+  "timeouts": {
+    "navigationMs": 60000,
+    "startupMs": 180000,
+    "commandMs": 300000
+  },
+  "selectors": {
+    "runningButtonText": "停止运行",
+    "startButtonText": "启动运行",
+    "openButtonText": "打开 QWENPAW",
+    "chatInput": "textarea, [contenteditable='true']",
+    "sendButton": "button[type='submit']"
+  }
+}
