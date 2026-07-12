@@ -40,20 +40,38 @@ jobs:
           PLATFORM_PASSWORD: ${{ secrets.PLATFORM_PASSWORD }}
           PLATFORM_URL: ${{ secrets.PLATFORM_URL }}
         run: |
-          test -n "$PLATFORM_EMAIL" || { echo "::error::缺少 Secret: PLATFORM_EMAIL"; exit 1; }
-          test -n "$PLATFORM_PASSWORD" || { echo "::error::缺少 Secret: PLATFORM_PASSWORD"; exit 1; }
-          test -n "$PLATFORM_URL" || { echo "::error::缺少 Secret: PLATFORM_URL"; exit 1; }
+          test -n "$PLATFORM_EMAIL" || { echo "::error::Missing PLATFORM_EMAIL"; exit 1; }
+          test -n "$PLATFORM_PASSWORD" || { echo "::error::Missing PLATFORM_PASSWORD"; exit 1; }
+          test -n "$PLATFORM_URL" || { echo "::error::Missing PLATFORM_URL"; exit 1; }
 
-      - name: Login, check platform and run command
+      - name: Locate monitor script and run
         env:
           PLATFORM_EMAIL: ${{ secrets.PLATFORM_EMAIL }}
           PLATFORM_PASSWORD: ${{ secrets.PLATFORM_PASSWORD }}
           PLATFORM_URL: ${{ secrets.PLATFORM_URL }}
           WAKEUP_COMMAND: /opt/komari/wakeup.sh
           HEADLESS: "true"
-        run: npm run check
+        run: |
+          echo "Repository files:"
+          find . -maxdepth 4 -type f -print | sort
 
-      - name: Upload platform screenshots
+          if [ -f "src/monitor.mjs" ]; then
+            SCRIPT="src/monitor.mjs"
+          elif [ -f "monitor.mjs" ]; then
+            SCRIPT="monitor.mjs"
+          else
+            SCRIPT="$(find . -maxdepth 4 -type f -name 'monitor.mjs' -print -quit)"
+          fi
+
+          if [ -z "$SCRIPT" ]; then
+            echo "::error::monitor.mjs was not found in this repository"
+            exit 1
+          fi
+
+          echo "Using script: $SCRIPT"
+          node "$SCRIPT"
+
+      - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -74,12 +92,12 @@ jobs:
           SERVER_URL: ${{ github.server_url }}
         run: |
           if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-            echo "未配置 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID，跳过通知。"
+            echo "Telegram secrets are not configured; skipping notification."
             exit 0
           fi
 
           RUN_URL="$SERVER_URL/$REPOSITORY/actions/runs/$RUN_ID"
-          printf -v MESSAGE 'QwenPaw 巡检结果: %s\n仓库: %s\n运行编号: %s\n详情: %s' \
+          printf -v MESSAGE 'QwenPaw status: %s\nRepository: %s\nRun: %s\nDetails: %s' \
             "$JOB_STATUS" "$REPOSITORY" "$RUN_NUMBER" "$RUN_URL"
 
           curl --fail --silent --show-error \
@@ -93,18 +111,18 @@ jobs:
             curl --fail --silent --show-error \
               --request POST \
               --form "chat_id=$TELEGRAM_CHAT_ID" \
-              --form "caption=QwenPaw 截图: $(basename "$image")" \
+              --form "caption=QwenPaw screenshot" \
               --form "photo=@$image" \
               "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto"
           done
 
-      - name: Keep only current workflow run
+      - name: Delete older workflow runs
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           CURRENT_RUN_ID: ${{ github.run_id }}
-          WORKFLOW_FILE: watchdog.yml
+          WORKFLOW_FILE: watchdog.yaml
         run: |
           runs="$(curl --fail --silent --show-error \
             --header "Accept: application/vnd.github+json" \
@@ -116,7 +134,6 @@ jobs:
             '.workflow_runs[] | select((.id | tostring) != $current) | .id' | \
           while read -r id; do
             [ -n "$id" ] || continue
-            echo "删除旧运行记录: $id"
             curl --fail --silent --show-error \
               --request DELETE \
               --header "Accept: application/vnd.github+json" \
